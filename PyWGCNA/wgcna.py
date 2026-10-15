@@ -1132,8 +1132,12 @@ class WGCNA(GeneExp):
             sys.exit("adjacency is not numeric")
         if shape[0] != shape[1]:
             sys.exit("adjacency is not square")
-        if np.max(np.fabs(np.subtract(adjMat, adjMat.T))) > 1e-12:
-            sys.exit("adjacency is not symmetric")
+        # check symmetry one block of rows at a time, so no full-size temporary is built
+        block = 2048
+        for start in range(0, shape[0], block):
+            end = start + block
+            if np.max(np.fabs(adjMat[start:end] - adjMat[:, start:end].T)) > 1e-12:
+                sys.exit("adjacency is not symmetric")
         if np.min(adjMat) < min or np.max(adjMat) > max:
             sys.exit(("some entries are not between", min, "and", max))
 
@@ -1142,17 +1146,24 @@ class WGCNA(GeneExp):
         # Prepare adjacency
         np.fill_diagonal(adjMat, 0)
         # Compute TOM
-        L = adjMat @ adjMat
+        # Same element-wise formula as before, written into the adjMat @ adjMat buffer one
+        # block of rows at a time. This avoids building MINK, the numerator and the
+        # denominator as full gene x gene matrices, and gives bit-identical results.
+        tom = adjMat @ adjMat
         ki = adjMat.sum(axis=1)
         kj = adjMat.sum(axis=0)
-        if TOMDenom == 0:  # min
-            MINK = np.array([np.minimum(ki_, kj) for ki_ in ki])
-        else:  # mean
-            MINK = np.array([((ki_ + kj) / 2) for ki_ in ki])
-        if TOMType == 0:  # unsigned
-            tom = (L + adjMat) / (MINK + 1 - adjMat)
-        else:  # signed
-            tom = np.fabs((L + adjMat)) / (MINK + 1 - np.fabs(adjMat))
+        block = 2048
+        for start in range(0, adjMat.shape[0], block):
+            end = start + block
+            adj = adjMat[start:end]
+            if TOMDenom == 0:  # min
+                MINK = np.minimum(ki[start:end, None], kj[None, :])
+            else:  # mean
+                MINK = (ki[start:end, None] + kj[None, :]) / 2
+            if TOMType == 0:  # unsigned
+                tom[start:end] = (tom[start:end] + adj) / (MINK + 1 - adj)
+            else:  # signed
+                tom[start:end] = np.fabs((tom[start:end] + adj)) / (MINK + 1 - np.fabs(adj))
         np.fill_diagonal(tom, 1)
         return tom
 
